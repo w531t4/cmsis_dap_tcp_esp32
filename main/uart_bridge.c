@@ -99,6 +99,12 @@ static const struct uart_bridge_config default_uart_bridge_config = {
     .stop_bits  = UART_STOP_BITS,
 };
 
+static void clear_task_handle(const struct uart_bridge_config *config)
+{
+    if(config && config->task_handle)
+        *config->task_handle = NULL;
+}
+
 void uart_bridge_task(void* arg)
 {
     struct uart_bridge_config config =
@@ -110,6 +116,7 @@ void uart_bridge_task(void* arg)
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(listen_fd < 0) {
         perror("UART bridge: Failed to create socket");
+        clear_task_handle(&config);
         vTaskDelete(NULL);
         return;
     }
@@ -126,12 +133,16 @@ void uart_bridge_task(void* arg)
     ret = bind(listen_fd, (struct sockaddr*)&server_addr, sizeof(server_addr));
     if(ret < 0) {
         perror("UART bridge: failed to bind socket");
+        close(listen_fd);
+        clear_task_handle(&config);
         vTaskDelete(NULL);
         return;
     }
     ret = listen(listen_fd, 1);
     if(ret < 0) {
         perror("UART bridge: failed to listen on socket");
+        close(listen_fd);
+        clear_task_handle(&config);
         vTaskDelete(NULL);
         return;
     }
@@ -141,6 +152,8 @@ void uart_bridge_task(void* arg)
             UART_BUFFER_SIZE, UART_BUFFER_SIZE, 0, NULL, 0);
     if(ret != ESP_OK) {
         fprintf(stderr, "UART bridge: UART driver installation failed\n");
+        close(listen_fd);
+        clear_task_handle(&config);
         vTaskDelete(NULL);
         return;
     }
@@ -174,7 +187,7 @@ void uart_bridge_task(void* arg)
     struct sockaddr_in client_addr;
     int client_fd = -1;
     int uart_fd = -1;
-    while (1) {
+    while (!(config.stop_requested && *config.stop_requested)) {
         fd_set read_fds;
         FD_ZERO(&read_fds);
 
@@ -187,12 +200,21 @@ void uart_bridge_task(void* arg)
         int max_fd = MAX(listen_fd, MAX(client_fd, uart_fd));
 
         // Blocking call to select.
-        int activity = select(max_fd+1, &read_fds, NULL, NULL, NULL);
+        struct timeval timeout;
+        struct timeval *timeout_ptr = NULL;
+        if (config.stop_requested) {
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 200000;
+            timeout_ptr = &timeout;
+        }
+        int activity = select(max_fd+1, &read_fds, NULL, NULL, timeout_ptr);
         if (activity < 0) {
             //ESP_LOGE(TAG, "select failed: errno %d", errno);
             perror("UART bridge: select error");
             break;
         }
+        if (activity == 0)
+            continue;
 
         // Handle new connections.
         if (FD_ISSET(listen_fd, &read_fds)) {
@@ -296,5 +318,7 @@ void uart_bridge_task(void* arg)
     if(uart_fd >= 0)
         close(uart_fd);
     close(listen_fd);
+    uart_driver_delete(config.uart_num);
+    clear_task_handle(&config);
     vTaskDelete(NULL);
 }

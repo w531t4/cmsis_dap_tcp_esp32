@@ -31,6 +31,8 @@ struct cmsis_dap_tcp_config {
     int disable_keepalive;
     int keepalive_timeout;
     const struct cmsis_dap_gpio_config *gpio;
+    volatile int *stop_requested;
+    TaskHandle_t *task_handle;
 };
 
 // Start the CMSIS-DAP TCP task. If config is not NULL, it must remain valid for
