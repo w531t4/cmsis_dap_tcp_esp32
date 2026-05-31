@@ -303,6 +303,12 @@ static void release_resources(int slot)
     portEXIT_CRITICAL(&active_resources_mux);
 }
 
+static void clear_task_handle(const struct cmsis_dap_tcp_config *config)
+{
+    if (config && config->task_handle)
+        *config->task_handle = NULL;
+}
+
 BaseType_t cmsis_dap_tcp_start(const struct cmsis_dap_tcp_config *config,
         const char *task_name, TaskHandle_t *handle)
 {
@@ -321,6 +327,7 @@ void cmsis_dap_tcp_task(void *arg)
     int resources_slot = reserve_resources(config, port, &resources);
     if (resources_slot < 0) {
         fprintf(stderr, "cmsis_dap_tcp: resource conflict on port or JTAG pins.\n");
+        clear_task_handle(config);
         vTaskDelete(NULL);
         return;
     }
@@ -341,6 +348,7 @@ void cmsis_dap_tcp_task(void *arg)
     if(listener_fd < 0) {
         perror("cmsis_dap_tcp: Failed to create listening socket.");
         release_resources(resources_slot);
+        clear_task_handle(config);
         vTaskDelete(NULL);
         return;
     }
@@ -363,6 +371,7 @@ void cmsis_dap_tcp_task(void *arg)
     if(listener_fd < 0) {
         perror("cmsis_dap_tcp: Failed to create listening socket.");
         release_resources(resources_slot);
+        clear_task_handle(config);
         vTaskDelete(NULL);
         return;
     }
@@ -376,6 +385,7 @@ void cmsis_dap_tcp_task(void *arg)
         perror("cmsis_dap_tcp: failed to bind socket");
         close(listener_fd);
         release_resources(resources_slot);
+        clear_task_handle(config);
         vTaskDelete(NULL);
         return;
     }
@@ -384,6 +394,7 @@ void cmsis_dap_tcp_task(void *arg)
         perror("cmsis_dap_tcp: failed to listen on socket");
         close(listener_fd);
         release_resources(resources_slot);
+        clear_task_handle(config);
         vTaskDelete(NULL);
         return;
     }
@@ -396,6 +407,7 @@ void cmsis_dap_tcp_task(void *arg)
         perror("cmsis_dap_tcp: failed to allocate task state");
         close(listener_fd);
         release_resources(resources_slot);
+        clear_task_handle(config);
         vTaskDelete(NULL);
         return;
     }
@@ -406,7 +418,7 @@ void cmsis_dap_tcp_task(void *arg)
     int client_fd = -1;
     int run __attribute__((unused)) = 0;
 
-    while (1) {
+    while (!(config && config->stop_requested && *config->stop_requested)) {
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(client_addr);
 
@@ -416,13 +428,23 @@ void cmsis_dap_tcp_task(void *arg)
         if (client_fd >= 0) FD_SET(client_fd, &read_fds);
         int fdmax = MAX(client_fd, listener_fd);
 
-        int sel = select(fdmax + 1, &read_fds, NULL, NULL, NULL);
+        struct timeval timeout;
+        struct timeval *timeout_ptr = NULL;
+        if (config && config->stop_requested) {
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 200000;
+            timeout_ptr = &timeout;
+        }
+
+        int sel = select(fdmax + 1, &read_fds, NULL, NULL, timeout_ptr);
         if (sel < 0) {
             if (errno == EINTR)
                 continue;
             perror("cmsis_dap_tcp: select error");
             break;
         }
+        if (sel == 0)
+            continue;
 
         LOG_DEBUG("run %d", ++run);
 
@@ -512,5 +534,6 @@ void cmsis_dap_tcp_task(void *arg)
     close(listener_fd);
     free(state);
     release_resources(resources_slot);
+    clear_task_handle(config);
     vTaskDelete(NULL);
 }
