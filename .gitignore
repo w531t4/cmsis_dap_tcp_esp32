@@ -1,1 +1,7 @@
 wifi_password.h
+/build
+/sdkconfig
+/sdkconfig.old
+/.cache
+/.vscode
+/flash_*.sh
