@@ -121,6 +121,9 @@ void uart_bridge_task(void* arg)
         return;
     }
 
+    int yes = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
     // Set socket as non-blocking.
     int flags = fcntl(listen_fd, F_GETFL, 0);
     fcntl(listen_fd, F_SETFL, flags | O_NONBLOCK);
